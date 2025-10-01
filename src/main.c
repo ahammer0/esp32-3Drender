@@ -4,6 +4,7 @@
 #include "esp_log.h"
 #include "hal/i2c_types.h"
 #include "soc/clk_tree_defs.h"
+#include <math.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -37,7 +38,7 @@ void i2c_init() {
   i2c_device_config_t dev_cfg = {
       .dev_addr_length = I2C_ADDR_BIT_LEN_7,
       .device_address = LCD_I2C_ADDRESS,
-      .scl_speed_hz = 100000,
+      .scl_speed_hz = 400000,
   };
 
   ESP_ERROR_CHECK(i2c_master_bus_add_device(bus_handle, &dev_cfg, &dev_handle));
@@ -122,6 +123,8 @@ LCD lcd_init() {
   return lcd;
 }
 void lcd_set_pixel(LCD *lcd, int x, int y, bool pixel) {
+  if (x < 0 || x >= SCREEN_WIDTH || y < 0 || y >= SCREEN_HEIGHT)
+    return;
   if (pixel) {
     lcd->framebuffer[y / 8 * SCREEN_WIDTH + x] |= 1 << (y % 8);
   } else {
@@ -131,6 +134,13 @@ void lcd_set_pixel(LCD *lcd, int x, int y, bool pixel) {
 
 void lcd_draw_scr(LCD *lcd) {
   i2c_transmit(0xE3, lcd->framebuffer, (lcd->size));
+}
+void lcd_draw_rectangle(int x1, int y1, int x2, int y2) {}
+
+void lcd_clr_scr(LCD *lcd) {
+  for (size_t i = 0; i < lcd->size; i++) {
+    lcd->framebuffer[i] = 0;
+  }
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -147,29 +157,49 @@ void app_main(void) {
   printf("lcd size %d\n", lcd.size);
 
   while (1) {
+    lcd_clr_scr(&lcd);
+    lcd_draw_scr(&lcd);
 
-    for (int i = 0; i < SCREEN_HEIGHT; i++) {
-      for (int j = 0; j < SCREEN_WIDTH; j++) {
-        lcd_set_pixel(&lcd, j, i, true);
-        lcd_draw_scr(&lcd);
-        printf("ici2\n");
-      }
+    float div_ang = 10.0;
+    float div_rad = 15.0;
+
+    for (size_t i = 0; i < 1000; i++) {
+
+      lcd_set_pixel(
+          &lcd, SCREEN_WIDTH / 2 + i / div_rad * cos(M_2_PI * i / div_ang),
+          SCREEN_HEIGHT / 2 + i / div_rad * sin(M_2_PI * i / div_ang), true);
+      lcd_draw_scr(&lcd);
     }
-    for (int i = 0; i < SCREEN_HEIGHT; i++) {
-      for (int j = 0; j < SCREEN_WIDTH; j++) {
-        lcd_set_pixel(&lcd, j, i, false);
-        lcd_draw_scr(&lcd);
-      }
+    for (size_t i = 0; i < 1000; i++) {
+
+      lcd_set_pixel(
+          &lcd, SCREEN_WIDTH / 2 + i / div_rad * cos(M_2_PI * i / div_ang),
+          SCREEN_HEIGHT / 2 + i / div_rad * sin(M_2_PI * i / div_ang), false);
+      lcd_draw_scr(&lcd);
     }
+
+    //   for (int i = 0; i < SCREEN_HEIGHT; i += 2) {
+    //     for (int j = 0; j < SCREEN_WIDTH; j += 2) {
+    //       lcd_set_pixel(&lcd, j, i, true);
+    //       lcd_set_pixel(&lcd, j + 1, i + 1, true);
+    //       lcd_draw_scr(&lcd);
+    //     }
+    //   }
+    //   for (int i = 0; i < SCREEN_HEIGHT; i++) {
+    //     for (int j = 0; j < SCREEN_WIDTH; j++) {
+    //       lcd_set_pixel(&lcd, j, i, false);
+    //       lcd_draw_scr(&lcd);
+    //     }
+    //   }
+    // }
+
+    // printf("I2C BUS device detector\n\n");
+    // for (uint16_t i = 0; i <= 127; i++) {
+    //   printf("scanning %x ...", i);
+    //   esp_err_t res = i2c_master_probe(bus_handle, i, -1);
+    //   if (res == ESP_OK) {
+    //     printf("found!");
+    //   }
+    //   printf("\n");
   }
-
-  // printf("I2C BUS device detector\n\n");
-  // for (uint16_t i = 0; i <= 127; i++) {
-  //   printf("scanning %x ...", i);
-  //   esp_err_t res = i2c_master_probe(bus_handle, i, -1);
-  //   if (res == ESP_OK) {
-  //     printf("found!");
-  //   }
-  //   printf("\n");
-  // }
 }
