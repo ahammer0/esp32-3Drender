@@ -2,6 +2,7 @@
 #include "driver/i2c_types.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "h_set.h"
 #include "hal/i2c_types.h"
 #include "soc/clk_tree_defs.h"
 #include <math.h>
@@ -44,9 +45,19 @@ void i2c_init() {
   ESP_ERROR_CHECK(i2c_master_bus_add_device(bus_handle, &dev_cfg, &dev_handle));
 }
 
-void i2c_transmit(uint8_t cmd, uint8_t *data, size_t data_len) {
+void i2c_transmit_raw(uint8_t *data, size_t data_len) {
   uint8_t tries = 0;
   esp_err_t res;
+  do {
+    res = i2c_master_transmit(dev_handle, data, data_len, -1);
+    tries++;
+  } while (res != ESP_OK && tries < 5);
+  if (tries >= 5) {
+    ESP_LOGE("I2C", "Failed to send data");
+  }
+}
+
+void i2c_transmit(uint8_t cmd, uint8_t *data, size_t data_len) {
   size_t buffer_size = data_len == 0 ? 2 : data_len + 3;
   uint8_t *buffer = malloc(sizeof(uint8_t) * buffer_size);
 
@@ -73,13 +84,7 @@ void i2c_transmit(uint8_t cmd, uint8_t *data, size_t data_len) {
     }
   }
 
-  do {
-    res = i2c_master_transmit(dev_handle, buffer, buffer_size, -1);
-    tries++;
-  } while (res != ESP_OK && tries < 5);
-  if (tries >= 5) {
-    ESP_LOGE("I2C", "Failed to send data");
-  }
+  i2c_transmit_raw(buffer, buffer_size);
 
   free(buffer);
 }
@@ -93,6 +98,7 @@ void i2c_transmit(uint8_t cmd, uint8_t *data, size_t data_len) {
 typedef struct {
   uint8_t framebuffer[SCREEN_HEIGHT / 8 * SCREEN_WIDTH];
   size_t size;
+  h_set_t *dirty_zones;
 } LCD;
 
 LCD lcd_init() {
@@ -102,44 +108,90 @@ LCD lcd_init() {
   i2c_transmit(0x8D, NULL, 0); // set charge pump
   i2c_transmit(0x14, NULL, 0);
   //
-  i2c_transmit(0x20, NULL, 0); // set hz addr mode
-  i2c_transmit(0x00, NULL, 0);
+  i2c_transmit(0x20, NULL, 0); // set page addr mode
+  i2c_transmit(0x02, NULL, 0);
 
-  i2c_transmit(0x21, NULL, 0); // set col addr
-  i2c_transmit(0x00, NULL, 0);
-  i2c_transmit(127, NULL, 0);
-
-  i2c_transmit(0x22, NULL, 0); // set page addr
-  i2c_transmit(0x00, NULL, 0);
-  i2c_transmit(7, NULL, 0);
+  // i2c_transmit(0x21, NULL, 0); // set col addr
+  // i2c_transmit(0x00, NULL, 0);
+  // i2c_transmit(127, NULL, 0);
+  //
+  // i2c_transmit(0x22, NULL, 0); // set page addr
+  // i2c_transmit(0x00, NULL, 0);
+  // i2c_transmit(7, NULL, 0);
 
   i2c_transmit(0xAF, NULL, 0); // set display ON
 
   LCD lcd = {
       .framebuffer = {0},
       .size = SCREEN_WIDTH * SCREEN_HEIGHT / 8,
+      .dirty_zones = h_set_new(8, 128),
   };
 
   return lcd;
 }
 void lcd_set_pixel(LCD *lcd, int x, int y, bool pixel) {
+  // TODO: register dirty columns
   if (x < 0 || x >= SCREEN_WIDTH || y < 0 || y >= SCREEN_HEIGHT)
     return;
+
+  int seg = x;
+  int page = y / 8;
+  h_set_add(lcd->dirty_zones, page, seg);
   if (pixel) {
-    lcd->framebuffer[y / 8 * SCREEN_WIDTH + x] |= 1 << (y % 8);
+    lcd->framebuffer[page * SCREEN_WIDTH + seg] |= 1 << (y % 8);
   } else {
-    lcd->framebuffer[y / 8 * SCREEN_WIDTH + x] &= ~(1 << (y % 8));
+    lcd->framebuffer[page * SCREEN_WIDTH + seg] &= ~(1 << (y % 8));
   }
 }
 
-void lcd_draw_scr(LCD *lcd) {
-  i2c_transmit(0xE3, lcd->framebuffer, (lcd->size));
+void lcd_draw_scr_diff(LCD *lcd) {
+  if (lcd->dirty_zones->size == 0)
+    return;
+  const uint8_t frame_size = 8;
+  const size_t buffer_size = frame_size * lcd->dirty_zones->size;
+  uint8_t *buffer = malloc(sizeof(uint8_t) * buffer_size);
+  int i = 0;
+
+  for (h_set_iter_t it = h_set_iter(lcd->dirty_zones); it.current != NULL;
+       h_set_next(&it)) {
+    // control byte :
+    // 0x00  -> command mode
+    // Ox40  --> data mode
+
+    // set page address
+    buffer[i * frame_size + 0] = 0x00;                    // command mode
+    buffer[i * frame_size + 1] = 0xB0 | it.current->page; // set page
+
+    // set column address
+    buffer[i * frame_size + 2] = 0x00; // next is command
+    // set column lower
+    buffer[i * frame_size + 3] = 0x00 | (it.current->segment & 0x0F);
+
+    buffer[i * frame_size + 4] = 0x00; // next is command
+    buffer[i * frame_size + 5] =
+        0x10 | (it.current->segment >> 4); // set column upper
+
+    // sending data
+    buffer[i * frame_size + 6] = 0x40; // next is data
+    buffer[i * frame_size + 7] =
+        lcd->framebuffer[it.current->page * SCREEN_WIDTH / 8 +
+                         it.current->segment];
+    i++;
+  }
+
+  i2c_transmit_raw(buffer, buffer_size);
+  h_set_clear(lcd->dirty_zones);
+  free(buffer);
 }
-void lcd_draw_rectangle(int x1, int y1, int x2, int y2) {}
 
 void lcd_clr_scr(LCD *lcd) {
   for (size_t i = 0; i < lcd->size; i++) {
     lcd->framebuffer[i] = 0;
+  }
+  for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 128; j++) {
+      h_set_add(lcd->dirty_zones, i, j);
+    }
   }
 }
 
@@ -158,25 +210,26 @@ void app_main(void) {
 
   while (1) {
     lcd_clr_scr(&lcd);
-    lcd_draw_scr(&lcd);
+    lcd_draw_scr_diff(&lcd);
 
     float div_ang = 10.0;
     float div_rad = 15.0;
 
-    for (size_t i = 0; i < 1000; i++) {
-
-      lcd_set_pixel(
-          &lcd, SCREEN_WIDTH / 2 + i / div_rad * cos(M_2_PI * i / div_ang),
-          SCREEN_HEIGHT / 2 + i / div_rad * sin(M_2_PI * i / div_ang), true);
-      lcd_draw_scr(&lcd);
-    }
-    for (size_t i = 0; i < 1000; i++) {
-
-      lcd_set_pixel(
-          &lcd, SCREEN_WIDTH / 2 + i / div_rad * cos(M_2_PI * i / div_ang),
-          SCREEN_HEIGHT / 2 + i / div_rad * sin(M_2_PI * i / div_ang), false);
-      lcd_draw_scr(&lcd);
-    }
+    // for (size_t i = 0; i < 1000; i++) {
+    //
+    //   lcd_set_pixel(
+    //       &lcd, SCREEN_WIDTH / 2 + i / div_rad * cos(M_2_PI * i / div_ang),
+    //       SCREEN_HEIGHT / 2 + i / div_rad * sin(M_2_PI * i / div_ang), true);
+    //   lcd_draw_scr_diff(&lcd);
+    // }
+    // for (size_t i = 0; i < 1000; i++) {
+    //
+    //   lcd_set_pixel(
+    //       &lcd, SCREEN_WIDTH / 2 + i / div_rad * cos(M_2_PI * i / div_ang),
+    //       SCREEN_HEIGHT / 2 + i / div_rad * sin(M_2_PI * i / div_ang),
+    //       false);
+    //   lcd_draw_scr_diff(&lcd);
+    // }
 
     //   for (int i = 0; i < SCREEN_HEIGHT; i += 2) {
     //     for (int j = 0; j < SCREEN_WIDTH; j += 2) {
