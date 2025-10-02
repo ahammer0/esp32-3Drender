@@ -1,6 +1,7 @@
 #include "i2c.h"
 #include "lcd.h"
 #include <math.h>
+#include "3d.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -21,35 +22,45 @@ void app_main(void) {
     lcd_clr_scr(&lcd);
     lcd_draw_scr_diff(&lcd);
 
-    // BOOM CIRCLE
-    float div_ang = 5.0;
-    float div_rad = 20.0;
-
-    int prev_x, prev_y, next_x, next_y;
-    prev_x = SCREEN_WIDTH / 2;
-    prev_y = SCREEN_HEIGHT / 2;
-    for (size_t i = 0; i < 1000; i++) {
-
-      next_x = SCREEN_WIDTH / 2 + i / div_rad * cos(M_2_PI * i / div_ang);
-      next_y = SCREEN_HEIGHT / 2 + i / div_rad * sin(M_2_PI * i / div_ang);
-      lcd_draw_line(&lcd, prev_x, prev_y, next_x, next_y, true);
-      prev_x = next_x;
-      prev_y = next_y;
-      if (i % (int)div_ang == 0) {
-        lcd_draw_scr_diff(&lcd);
-      }
+    // WIREFRAME CUBE 
+    shape_3d super_cube = cube((vec3){SCREEN_WIDTH/2,SCREEN_HEIGHT/2,0},20);
+    
+    while(1){
+      rotate(&super_cube, (vec3){1,1,1}, M_PI/180);
+      lcd_clr_scr(&lcd);
+      draw_3d_shape(&lcd, &super_cube);
+      lcd_draw_scr_diff(&lcd);
     }
-    for (size_t i = 0; i < 1000; i++) {
-      next_x = SCREEN_WIDTH / 2 + i / div_rad * cos(M_2_PI * i / div_ang);
-      next_y = SCREEN_HEIGHT / 2 + i / div_rad * sin(M_2_PI * i / div_ang);
-      lcd_draw_line(&lcd, prev_x, prev_y, next_x, next_y, false);
-      prev_x = next_x;
-      prev_y = next_y;
 
-      if (i % (int)div_ang == 0) {
-        lcd_draw_scr_diff(&lcd);
-      }
-    }
+    // // BOOM CIRCLE
+    // float div_ang = 5.0;
+    // float div_rad = 20.0;
+    //
+    // int prev_x, prev_y, next_x, next_y;
+    // prev_x = SCREEN_WIDTH / 2;
+    // prev_y = SCREEN_HEIGHT / 2;
+    // for (size_t i = 0; i < 1000; i++) {
+    //
+    //   next_x = SCREEN_WIDTH / 2 + i / div_rad * cos(M_2_PI * i / div_ang);
+    //   next_y = SCREEN_HEIGHT / 2 + i / div_rad * sin(M_2_PI * i / div_ang);
+    //   lcd_draw_line(&lcd, prev_x, prev_y, next_x, next_y, true);
+    //   prev_x = next_x;
+    //   prev_y = next_y;
+    //   if (i % (int)div_ang == 0) {
+    //     lcd_draw_scr_diff(&lcd);
+    //   }
+    // }
+    // for (size_t i = 0; i < 1000; i++) {
+    //   next_x = SCREEN_WIDTH / 2 + i / div_rad * cos(M_2_PI * i / div_ang);
+    //   next_y = SCREEN_HEIGHT / 2 + i / div_rad * sin(M_2_PI * i / div_ang);
+    //   lcd_draw_line(&lcd, prev_x, prev_y, next_x, next_y, false);
+    //   prev_x = next_x;
+    //   prev_y = next_y;
+    //
+    //   if (i % (int)div_ang == 0) {
+    //     lcd_draw_scr_diff(&lcd);
+    //   }
+    // }
 
     // FULL SCREEN SCAN ANIM
     // for (int i = 0; i < SCREEN_HEIGHT; i += 2) {
