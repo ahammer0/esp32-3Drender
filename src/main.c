@@ -126,6 +126,11 @@ LCD lcd_init() {
       .size = SCREEN_WIDTH * SCREEN_HEIGHT / 8,
       .dirty_zones = h_set_new(8, 128),
   };
+  for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 128; j++) {
+      h_set_add(lcd.dirty_zones, i, j);
+    }
+  }
 
   return lcd;
 }
@@ -186,9 +191,10 @@ void lcd_draw_scr_diff(LCD *lcd) {
 void lcd_clr_scr(LCD *lcd) {
   for (int i = 0; i < 8; i++) {
     for (int j = 0; j < 128; j++) {
-      lcd->framebuffer[i][j] = 0x00;
-
-      h_set_add(lcd->dirty_zones, i, j);
+      if (lcd->framebuffer[i][j] != 0x00) {
+        h_set_add(lcd->dirty_zones, i, j);
+        lcd->framebuffer[i][j] = 0x00;
+      }
     }
   }
 }
@@ -235,6 +241,7 @@ void app_main(void) {
     lcd_clr_scr(&lcd);
     lcd_draw_scr_diff(&lcd);
 
+    // BOOM CIRCLE
     float div_ang = 5.0;
     float div_rad = 20.0;
 
@@ -264,6 +271,7 @@ void app_main(void) {
       }
     }
 
+    // FULL SCREEN SCAN ANIM
     // for (int i = 0; i < SCREEN_HEIGHT; i += 2) {
     //   for (int j = 0; j < SCREEN_WIDTH; j += 2) {
     //     lcd_set_pixel(&lcd, j, i, true);
