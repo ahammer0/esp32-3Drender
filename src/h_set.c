@@ -17,7 +17,7 @@ h_set_t *h_set_new(uint8_t page_max, uint8_t segment_max) {
 }
 
 int hash(h_set_t *set, uint8_t page, uint8_t segment) {
-  return page * set->max_page + segment;
+  return page * set->max_segment + segment;
 }
 
 bool h_set_has(h_set_t *set, uint8_t page, uint8_t segment) {

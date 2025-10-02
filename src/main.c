@@ -96,7 +96,7 @@ void i2c_transmit(uint8_t cmd, uint8_t *data, size_t data_len) {
 ///////////////////////////////////////////////////////////////////////////////
 
 typedef struct {
-  uint8_t framebuffer[SCREEN_HEIGHT / 8 * SCREEN_WIDTH];
+  uint8_t framebuffer[SCREEN_HEIGHT / 8][SCREEN_WIDTH];
   size_t size;
   h_set_t *dirty_zones;
 } LCD;
@@ -122,7 +122,7 @@ LCD lcd_init() {
   i2c_transmit(0xAF, NULL, 0); // set display ON
 
   LCD lcd = {
-      .framebuffer = {0},
+      .framebuffer = {{0}},
       .size = SCREEN_WIDTH * SCREEN_HEIGHT / 8,
       .dirty_zones = h_set_new(8, 128),
   };
@@ -138,9 +138,9 @@ void lcd_set_pixel(LCD *lcd, int x, int y, bool pixel) {
   int page = y / 8;
   h_set_add(lcd->dirty_zones, page, seg);
   if (pixel) {
-    lcd->framebuffer[page * SCREEN_WIDTH + seg] |= 1 << (y % 8);
+    lcd->framebuffer[page][seg] |= 1 << (y % 8);
   } else {
-    lcd->framebuffer[page * SCREEN_WIDTH + seg] &= ~(1 << (y % 8));
+    lcd->framebuffer[page][seg] &= ~(1 << (y % 8));
   }
 }
 
@@ -155,27 +155,26 @@ void lcd_draw_scr_diff(LCD *lcd) {
   for (h_set_iter_t it = h_set_iter(lcd->dirty_zones); it.current != NULL;
        h_set_next(&it)) {
     // control byte :
-    // 0x00  -> command mode
-    // Ox40  --> data mode
+    // 0x80  -> command mode
+    // OxC0  --> data mode
 
     // set page address
-    buffer[i * frame_size + 0] = 0x00;                    // command mode
+    buffer[i * frame_size + 0] = 0x80;                    // command mode
     buffer[i * frame_size + 1] = 0xB0 | it.current->page; // set page
 
     // set column address
-    buffer[i * frame_size + 2] = 0x00; // next is command
+    buffer[i * frame_size + 2] = 0x80; // next is command
     // set column lower
     buffer[i * frame_size + 3] = 0x00 | (it.current->segment & 0x0F);
 
-    buffer[i * frame_size + 4] = 0x00; // next is command
+    buffer[i * frame_size + 4] = 0x80; // next is command
     buffer[i * frame_size + 5] =
         0x10 | (it.current->segment >> 4); // set column upper
 
     // sending data
-    buffer[i * frame_size + 6] = 0x40; // next is data
+    buffer[i * frame_size + 6] = 0xC0; // next is data
     buffer[i * frame_size + 7] =
-        lcd->framebuffer[it.current->page * SCREEN_WIDTH / 8 +
-                         it.current->segment];
+        lcd->framebuffer[it.current->page][it.current->segment];
     i++;
   }
 
@@ -185,12 +184,39 @@ void lcd_draw_scr_diff(LCD *lcd) {
 }
 
 void lcd_clr_scr(LCD *lcd) {
-  for (size_t i = 0; i < lcd->size; i++) {
-    lcd->framebuffer[i] = 0;
-  }
   for (int i = 0; i < 8; i++) {
     for (int j = 0; j < 128; j++) {
+      lcd->framebuffer[i][j] = 0x00;
+
       h_set_add(lcd->dirty_zones, i, j);
+    }
+  }
+}
+void lcd_draw_line(LCD *lcd, int x0, int y0, int x1, int y1, bool pixel) {
+  int dx = abs(x1 - x0);
+  int dy = abs(y1 - y0);
+
+  int sx = (x0 < x1) ? 1 : -1;
+  int sy = (y0 < y1) ? 1 : -1;
+
+  int err = dx - dy;
+
+  while (true) {
+    lcd_set_pixel(lcd, x0, y0, pixel); // Trace le point courant
+
+    if (x0 == x1 && y0 == y1)
+      break;
+
+    int e2 = 2 * err;
+
+    if (e2 > -dy) {
+      err -= dy;
+      x0 += sx;
+    }
+
+    if (e2 < dx) {
+      err += dx;
+      y0 += sy;
     }
   }
 }
@@ -205,54 +231,60 @@ void app_main(void) {
   i2c_init();
   LCD lcd = lcd_init();
 
-  printf("sizeof framebuffer %d\n", sizeof(lcd.framebuffer));
-  printf("lcd size %d\n", lcd.size);
-
   while (1) {
     lcd_clr_scr(&lcd);
     lcd_draw_scr_diff(&lcd);
 
-    float div_ang = 10.0;
-    float div_rad = 15.0;
+    float div_ang = 5.0;
+    float div_rad = 20.0;
 
-    // for (size_t i = 0; i < 1000; i++) {
-    //
-    //   lcd_set_pixel(
-    //       &lcd, SCREEN_WIDTH / 2 + i / div_rad * cos(M_2_PI * i / div_ang),
-    //       SCREEN_HEIGHT / 2 + i / div_rad * sin(M_2_PI * i / div_ang), true);
-    //   lcd_draw_scr_diff(&lcd);
-    // }
-    // for (size_t i = 0; i < 1000; i++) {
-    //
-    //   lcd_set_pixel(
-    //       &lcd, SCREEN_WIDTH / 2 + i / div_rad * cos(M_2_PI * i / div_ang),
-    //       SCREEN_HEIGHT / 2 + i / div_rad * sin(M_2_PI * i / div_ang),
-    //       false);
-    //   lcd_draw_scr_diff(&lcd);
-    // }
+    int prev_x, prev_y, next_x, next_y;
+    prev_x = SCREEN_WIDTH / 2;
+    prev_y = SCREEN_HEIGHT / 2;
+    for (size_t i = 0; i < 1000; i++) {
 
-    //   for (int i = 0; i < SCREEN_HEIGHT; i += 2) {
-    //     for (int j = 0; j < SCREEN_WIDTH; j += 2) {
-    //       lcd_set_pixel(&lcd, j, i, true);
-    //       lcd_set_pixel(&lcd, j + 1, i + 1, true);
-    //       lcd_draw_scr(&lcd);
-    //     }
-    //   }
-    //   for (int i = 0; i < SCREEN_HEIGHT; i++) {
-    //     for (int j = 0; j < SCREEN_WIDTH; j++) {
-    //       lcd_set_pixel(&lcd, j, i, false);
-    //       lcd_draw_scr(&lcd);
-    //     }
+      next_x = SCREEN_WIDTH / 2 + i / div_rad * cos(M_2_PI * i / div_ang);
+      next_y = SCREEN_HEIGHT / 2 + i / div_rad * sin(M_2_PI * i / div_ang);
+      lcd_draw_line(&lcd, prev_x, prev_y, next_x, next_y, true);
+      prev_x = next_x;
+      prev_y = next_y;
+      if (i % (int)div_ang == 0) {
+        lcd_draw_scr_diff(&lcd);
+      }
+    }
+    for (size_t i = 0; i < 1000; i++) {
+      next_x = SCREEN_WIDTH / 2 + i / div_rad * cos(M_2_PI * i / div_ang);
+      next_y = SCREEN_HEIGHT / 2 + i / div_rad * sin(M_2_PI * i / div_ang);
+      lcd_draw_line(&lcd, prev_x, prev_y, next_x, next_y, false);
+      prev_x = next_x;
+      prev_y = next_y;
+
+      if (i % (int)div_ang == 0) {
+        lcd_draw_scr_diff(&lcd);
+      }
+    }
+
+    // for (int i = 0; i < SCREEN_HEIGHT; i += 2) {
+    //   for (int j = 0; j < SCREEN_WIDTH; j += 2) {
+    //     lcd_set_pixel(&lcd, j, i, true);
+    //     lcd_set_pixel(&lcd, j + 1, i + 1, true);
+    //     lcd_draw_scr_diff(&lcd);
     //   }
     // }
-
-    // printf("I2C BUS device detector\n\n");
-    // for (uint16_t i = 0; i <= 127; i++) {
-    //   printf("scanning %x ...", i);
-    //   esp_err_t res = i2c_master_probe(bus_handle, i, -1);
-    //   if (res == ESP_OK) {
-    //     printf("found!");
+    // for (int i = 0; i < SCREEN_HEIGHT; i++) {
+    //   for (int j = 0; j < SCREEN_WIDTH; j++) {
+    //     lcd_set_pixel(&lcd, j, i, false);
+    //     lcd_draw_scr_diff(&lcd);
     //   }
-    //   printf("\n");
+    // }
   }
+
+  // printf("I2C BUS device detector\n\n");
+  // for (uint16_t i = 0; i <= 127; i++) {
+  //   printf("scanning %x ...", i);
+  //   esp_err_t res = i2c_master_probe(bus_handle, i, -1);
+  //   if (res == ESP_OK) {
+  //     printf("found!");
+  //   }
+  //   printf("\n");
 }
